@@ -137,6 +137,9 @@ async def start_bot(config_path: str):
             yolo_mode=cfg["filters"].get("yolo_mode", False),
             # Compute unit configuration
             compute_units=cfg.get("compute_units", {}),
+            # Dry run configuration
+            dry_run_enabled=cfg.get("dry_run", {}).get("enabled", False),
+            dry_run_config=cfg.get("dry_run", {}),
         )
 
         await trader.start()

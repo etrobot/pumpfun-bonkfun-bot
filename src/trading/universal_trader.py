@@ -85,6 +85,9 @@ class UniversalTrader:
         yolo_mode: bool = False,
         # Compute unit configuration
         compute_units: dict | None = None,
+        # Dry run configuration
+        dry_run_enabled: bool = False,
+        dry_run_config: dict | None = None,
     ):
         """Initialize the universal trader."""
         # Core components
@@ -125,27 +128,66 @@ class UniversalTrader:
         # Store compute unit configuration
         self.compute_units = compute_units or {}
 
-        # Create platform-aware traders
-        self.buyer = PlatformAwareBuyer(
-            self.solana_client,
-            self.wallet,
-            self.priority_fee_manager,
-            buy_amount,
-            buy_slippage,
-            max_retries,
-            extreme_fast_token_amount,
-            extreme_fast_mode,
-            compute_units=self.compute_units,
-        )
+        # Dry run configuration
+        self.dry_run_enabled = dry_run_enabled
+        self.dry_run_config = dry_run_config or {}
 
-        self.seller = PlatformAwareSeller(
-            self.solana_client,
-            self.wallet,
-            self.priority_fee_manager,
-            sell_slippage,
-            max_retries,
-            compute_units=self.compute_units,
-        )
+        # Create traders (dry run or real)
+        if self.dry_run_enabled:
+            from trading.dry_run import DryRunBuyer, DryRunSeller, PriceActionStrategy
+            
+            # Initialize price action strategy
+            price_action_config = self.dry_run_config.get("price_action", {})
+            price_action_strategy = PriceActionStrategy(
+                min_price_points=price_action_config.get("min_price_points", 3),
+                analysis_window=price_action_config.get("analysis_window", 180),
+                volatility_threshold=price_action_config.get("volatility_threshold", 0.15),
+                momentum_threshold=price_action_config.get("momentum_threshold", 0.08),
+                volume_surge_multiplier=price_action_config.get("volume_surge_multiplier", 3.0),
+            )
+            
+            # Create dry run traders
+            self.buyer = DryRunBuyer(
+                initial_balance=self.dry_run_config.get("initial_balance", 1.0),
+                trade_amount=self.dry_run_config.get("trade_amount", buy_amount),
+                price_action_strategy=price_action_strategy,
+                max_positions=self.dry_run_config.get("max_positions", 5),
+                stop_loss_pct=self.dry_run_config.get("stop_loss_pct", 25.0),
+                take_profit_pct=self.dry_run_config.get("take_profit_pct", 100.0),
+            )
+
+            self.seller = DryRunSeller(
+                initial_balance=self.dry_run_config.get("initial_balance", 1.0),
+                trade_amount=self.dry_run_config.get("trade_amount", buy_amount),
+                price_action_strategy=price_action_strategy,
+                max_positions=self.dry_run_config.get("max_positions", 5),
+                stop_loss_pct=self.dry_run_config.get("stop_loss_pct", 25.0),
+                take_profit_pct=self.dry_run_config.get("take_profit_pct", 100.0),
+            )
+            
+            logger.info("Initialized dry run traders with price action strategy")
+        else:
+            # Create real platform-aware traders
+            self.buyer = PlatformAwareBuyer(
+                self.solana_client,
+                self.wallet,
+                self.priority_fee_manager,
+                buy_amount,
+                buy_slippage,
+                max_retries,
+                extreme_fast_token_amount,
+                extreme_fast_mode,
+                compute_units=self.compute_units,
+            )
+
+            self.seller = PlatformAwareSeller(
+                self.solana_client,
+                self.wallet,
+                self.priority_fee_manager,
+                sell_slippage,
+                max_retries,
+                compute_units=self.compute_units,
+            )
 
         # Initialize the appropriate listener with platform filtering
         self.token_listener = ListenerFactory.create_listener(
@@ -271,6 +313,19 @@ class UniversalTrader:
             logger.exception("Trading stopped due to error")
 
         finally:
+            # Generate final dry run report if enabled
+            if self.dry_run_enabled:
+                try:
+                    report = await self.buyer.generate_performance_report()
+                    logger.info("=== DRY RUN PERFORMANCE REPORT ===")
+                    logger.info(f"Total Return: {report['summary']['total_return_pct']:.2f}%")
+                    logger.info(f"Total Trades: {report['trading_stats']['total_trades']}")
+                    logger.info(f"Win Rate: {report['trading_stats']['win_rate_pct']:.1f}%")
+                    logger.info(f"Best Trade: {report['trading_stats']['best_trade']:.6f} SOL")
+                    logger.info(f"Worst Trade: {report['trading_stats']['worst_trade']:.6f} SOL")
+                except Exception as e:
+                    logger.exception("Failed to generate dry run report")
+                    
             await self._cleanup_resources()
             logger.info("Universal Trader has shut down")
 
@@ -421,6 +476,13 @@ class UniversalTrader:
                 await self._handle_successful_buy(token_info, buy_result)
             else:
                 await self._handle_failed_buy(token_info, buy_result)
+
+            # Monitor dry run positions if enabled
+            if self.dry_run_enabled and hasattr(self.buyer, 'monitor_positions'):
+                try:
+                    await self.buyer.monitor_positions()
+                except Exception as e:
+                    logger.exception("Error monitoring dry run positions")
 
             # Only wait for next token in yolo mode
             if self.yolo_mode:

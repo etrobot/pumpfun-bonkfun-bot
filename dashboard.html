@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 实时模拟交易Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'pulse-slow': 'pulse 2s infinite',
+                        'bounce-light': 'bounce 1s infinite',
+                    },
+                    colors: {
+                        'trading-green': '#10b981',
+                        'trading-red': '#ef4444',
+                        'trading-blue': '#3b82f6',
+                        'trading-purple': '#8b5cf6',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .chart-container canvas {
+            background: transparent !important;
+        }
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-800 via-gray-900 to-gray-800 text-white min-h-screen p-2 sm:p-4 overflow-x-hidden">
+    <div class="max-w-7xl mx-auto min-h-screen flex flex-col">
+        <!-- Header -->
+        <div class="text-center mb-6 flex-shrink-0">
+            <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2 text-shadow-lg">
+                🚀 实时模拟交易Dashboard
+            </h1>
+            <div class="inline-block glass-effect px-4 py-2 rounded-full text-sm animate-pulse-slow bg-trading-green bg-opacity-20">
+                <span class="inline-block w-2 h-2 bg-trading-green rounded-full mr-2 animate-bounce-light"></span>
+                交易进行中
+            </div>
+        </div>
+        
+        <!-- Metrics Grid -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-6 flex-shrink-0" id="metricsGrid">
+            <div class="glass-effect rounded-xl p-4 text-center transition-transform hover:-translate-y-1">
+                <div class="text-white text-opacity-70 text-xs sm:text-sm mb-2 uppercase tracking-wide">加载中...</div>
+            </div>
+        </div>
+        
+        <!-- Main Content -->
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 min-h-0">
+            <!-- Portfolio Chart -->
+            <div class="lg:col-span-2 glass-effect rounded-xl p-4 sm:p-6 flex flex-col">
+                <h3 class="text-center text-lg sm:text-xl font-semibold mb-4">📈 投资组合价值</h3>
+                <div class="flex-1 relative min-h-[200px] sm:min-h-[250px] max-h-[350px]">
+                    <canvas id="portfolioChart"></canvas>
+                </div>
+            </div>
+            
+            <!-- Win Rate Chart -->
+            <div class="glass-effect rounded-xl p-4 sm:p-6 flex flex-col">
+                <h3 class="text-center text-lg sm:text-xl font-semibold mb-4">🎯 胜负比例</h3>
+                <div class="flex-1 relative min-h-[200px] sm:min-h-[250px] max-h-[300px]">
+                    <canvas id="winRateChart"></canvas>
+                </div>
+            </div>
+            <!-- Trades Section -->
+            <div class="glass-effect rounded-xl p-4 sm:p-6 mt-4 sm:mt-6 flex flex-col max-h-[400px]">
+                <h3 class="text-center text-lg sm:text-xl font-semibold mb-4">📊 最近交易记录</h3>
+                <div class="flex-1 overflow-y-auto scrollbar-thin" id="tradesContainer">
+                    <div class="text-center text-white text-opacity-70 py-8">加载交易数据...</div>
+                </div>
+            </div>
+        </div>
+        
+
+        
+        <!-- Last Update -->
+        <div class="text-center text-white text-opacity-60 text-xs mt-4 flex-shrink-0" id="lastUpdate"></div>
+    </div>
+
+    <script>
+        let portfolioChart, winRateChart;
+        let updateTimeout;
+        
+        // 等待Chart.js加载完成
+        function waitForChart() {
+            return new Promise((resolve) => {
+                if (typeof Chart !== 'undefined') {
+                    resolve();
+                } else {
+                    setTimeout(() => waitForChart().then(resolve), 100);
+                }
+            });
+        }
+        
+        // 初始化图表
+        async function initCharts() {
+            await waitForChart();
+            // 投资组合图表
+            const portfolioCtx = document.getElementById('portfolioChart').getContext('2d');
+            portfolioChart = new Chart(portfolioCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '投资组合价值 (SOL)',
+                        data: [],
+                        borderColor: '#4CAF50',
+                        backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 2,
+                        pointHoverRadius: 4,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 300 },
+                    plugins: {
+                        legend: { 
+                            labels: { color: '#fff', font: { size: 11 } }
+                        }
+                    },
+                    scales: {
+                        x: { 
+                            ticks: { color: '#fff', font: { size: 10 } }, 
+                            grid: { color: 'rgba(255,255,255,0.1)' },
+                            display: true
+                        },
+                        y: { 
+                            ticks: { color: '#fff', font: { size: 10 } }, 
+                            grid: { color: 'rgba(255,255,255,0.1)' }
+                        }
+                    },
+                    elements: {
+                        point: { radius: 1 }
+                    }
+                }
+            });
+            
+            // 胜负比例图表
+            const winRateCtx = document.getElementById('winRateChart').getContext('2d');
+            winRateChart = new Chart(winRateCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['盈利交易', '亏损交易'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#4CAF50', '#f44336'],
+                        borderWidth: 2,
+                        borderColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 300 },
+                    plugins: {
+                        legend: { 
+                            labels: { color: '#fff', font: { size: 11 } },
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 更新数据
+        async function updateDashboard() {
+            try {
+                const response = await fetch('/api/data');
+                if (!response.ok) throw new Error('Network response was not ok');
+                
+                const data = await response.json();
+                
+                updateMetrics(data);
+                updateCharts(data);
+                updateTrades(data);
+                
+                document.getElementById('lastUpdate').textContent = 
+                    `最后更新: ${new Date().toLocaleTimeString()}`;
+                    
+            } catch (error) {
+                console.error('数据更新失败:', error);
+                document.getElementById('lastUpdate').textContent = 
+                    `更新失败: ${new Date().toLocaleTimeString()}`;
+            }
+        }
+        
+        // 更新指标卡片
+        function updateMetrics(data) {
+            const { summary, stats } = data;
+            
+            document.getElementById('metricsGrid').innerHTML = `
+                <div class="glass-effect rounded-xl p-4 text-center transition-transform hover:-translate-y-1">
+                    <h3 class="text-white text-opacity-70 text-xs sm:text-sm mb-2 uppercase tracking-wide">投资组合价值</h3>
+                    <div class="text-xl sm:text-2xl font-bold mb-1">${summary.portfolio_value.toFixed(4)} SOL</div>
+                    <div class="text-xs sm:text-sm ${summary.total_return_pct >= 0 ? 'text-trading-green' : 'text-trading-red'}">
+                        ${summary.total_return_pct >= 0 ? '+' : ''}${summary.total_return_pct.toFixed(2)}%
+                    </div>
+                </div>
+                <div class="glass-effect rounded-xl p-4 text-center transition-transform hover:-translate-y-1">
+                    <h3 class="text-white text-opacity-70 text-xs sm:text-sm mb-2 uppercase tracking-wide">可用余额</h3>
+                    <div class="text-xl sm:text-2xl font-bold mb-1">${summary.current_balance.toFixed(4)} SOL</div>
+                    <div class="text-xs sm:text-sm text-white text-opacity-70">初始: ${summary.initial_balance.toFixed(1)} SOL</div>
+                </div>
+                <div class="glass-effect rounded-xl p-4 text-center transition-transform hover:-translate-y-1">
+                    <h3 class="text-white text-opacity-70 text-xs sm:text-sm mb-2 uppercase tracking-wide">胜率</h3>
+                    <div class="text-xl sm:text-2xl font-bold mb-1">${stats.win_rate.toFixed(1)}%</div>
+                    <div class="text-xs sm:text-sm text-white text-opacity-70">${stats.winning_trades}胜 / ${stats.losing_trades}负</div>
+                </div>
+                <div class="glass-effect rounded-xl p-4 text-center transition-transform hover:-translate-y-1">
+                    <h3 class="text-white text-opacity-70 text-xs sm:text-sm mb-2 uppercase tracking-wide">总交易数</h3>
+                    <div class="text-xl sm:text-2xl font-bold mb-1">${summary.total_trades}</div>
+                    <div class="text-xs sm:text-sm text-white text-opacity-70">活跃: ${stats.active_positions}</div>
+                </div>
+            `;
+        }
+        
+        // 更新图表
+        function updateCharts(data) {
+            // 更新投资组合图表
+            const history = data.portfolio_history || [];
+            const maxPoints = 20; // 限制显示点数
+            const recentHistory = history.slice(-maxPoints);
+            
+            portfolioChart.data.labels = recentHistory.map(h => 
+                new Date(h.timestamp).toLocaleTimeString().slice(0, 5)
+            );
+            portfolioChart.data.datasets[0].data = recentHistory.map(h => h.value);
+            portfolioChart.update('none');
+            
+            // 更新胜负比例图表
+            const winTrades = data.stats.winning_trades || 0;
+            const loseTrades = data.stats.losing_trades || 0;
+            
+            if (winTrades + loseTrades > 0) {
+                winRateChart.data.datasets[0].data = [winTrades, loseTrades];
+            } else {
+                winRateChart.data.datasets[0].data = [1, 0]; // 显示默认状态
+            }
+            winRateChart.update('none');
+        }
+        
+        // 更新交易记录
+        function updateTrades(data) {
+            const trades = data.recent_trades || [];
+            const container = document.getElementById('tradesContainer');
+            
+            if (trades.length === 0) {
+                container.innerHTML = '<div class="text-center text-white text-opacity-70 py-8">暂无交易记录</div>';
+                return;
+            }
+            
+            // 只显示最近15条记录
+            const recentTrades = trades.slice(0, 15);
+            
+            container.innerHTML = `
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="border-b border-white border-opacity-20">
+                                <th class="text-left text-white text-opacity-70 text-xs sm:text-sm font-semibold py-2 px-2 sm:px-3">时间</th>
+                                <th class="text-left text-white text-opacity-70 text-xs sm:text-sm font-semibold py-2 px-2 sm:px-3">代币</th>
+                                <th class="text-left text-white text-opacity-70 text-xs sm:text-sm font-semibold py-2 px-2 sm:px-3">操作</th>
+                                <th class="text-left text-white text-opacity-70 text-xs sm:text-sm font-semibold py-2 px-2 sm:px-3">价格</th>
+                                <th class="text-left text-white text-opacity-70 text-xs sm:text-sm font-semibold py-2 px-2 sm:px-3">盈亏</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-white divide-opacity-10">
+                            ${recentTrades.map(trade => `
+                                <tr class="hover:bg-white hover:bg-opacity-5 transition-colors">
+                                    <td class="text-xs sm:text-sm py-2 px-2 sm:px-3">${new Date(trade.timestamp).toLocaleTimeString().slice(0, 5)}</td>
+                                    <td class="text-xs sm:text-sm py-2 px-2 sm:px-3 font-medium">${trade.symbol}</td>
+                                    <td class="text-xs sm:text-sm py-2 px-2 sm:px-3 font-semibold ${trade.action === 'buy' ? 'text-trading-green' : 'text-orange-400'}">${trade.action === 'buy' ? '买入' : '卖出'}</td>
+                                    <td class="text-xs sm:text-sm py-2 px-2 sm:px-3 font-mono">${trade.price.toExponential(2)}</td>
+                                    <td class="text-xs sm:text-sm py-2 px-2 sm:px-3 font-semibold ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? 'text-trading-green' : 'text-trading-red') : 'text-white text-opacity-50'}">
+                                        ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(1) + '%' : '-'}
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', async function() {
+            try {
+                await initCharts();
+                updateDashboard();
+                
+                // 每5秒更新一次(降低频率以提高性能)
+                setInterval(updateDashboard, 5000);
+            } catch (error) {
+                console.error('初始化失败:', error);
+                document.getElementById('lastUpdate').textContent = '初始化失败，请刷新页面';
+            }
+        });
+        
+        // 页面可见性变化时暂停/恢复更新
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                if (updateTimeout) clearTimeout(updateTimeout);
+            } else {
+                updateDashboard();
+            }
+        });
+    </script>
+</body>
+</html>
