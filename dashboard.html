@@ -56,10 +56,14 @@
             <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2 text-shadow-lg">
                 🚀 实时模拟交易Dashboard
             </h1>
-            <div class="inline-block glass-effect px-4 py-2 rounded-full text-sm animate-pulse-slow bg-trading-green bg-opacity-20">
-                <span class="inline-block w-2 h-2 bg-trading-green rounded-full mr-2 animate-bounce-light"></span>
-                交易进行中
+            <div class="status-indicator inline-block glass-effect px-4 py-2 rounded-full text-sm bg-yellow-500 bg-opacity-20 animate-bounce">
+                🔄 连接中...
             </div>
+        </div>
+        
+        <!-- Activity Log -->
+        <div class="glass-effect rounded-xl p-3 sm:p-4 mb-4 max-h-40 overflow-y-auto scrollbar-thin" id="activityLog">
+            <div class="text-white text-opacity-70 text-xs">等待日志...</div>
         </div>
         
         <!-- Metrics Grid -->
@@ -70,24 +74,17 @@
         </div>
         
         <!-- Main Content -->
-        <div class="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 min-h-0">
+        <div class="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 min-h-0 items-top">
             <!-- Portfolio Chart -->
-            <div class="lg:col-span-2 glass-effect rounded-xl p-4 sm:p-6 flex flex-col">
+            <div class="lg:col-span-1 glass-effect rounded-xl p-4 flex flex-col">
                 <h3 class="text-center text-lg sm:text-xl font-semibold mb-4">📈 投资组合价值</h3>
                 <div class="flex-1 relative min-h-[200px] sm:min-h-[250px] max-h-[350px]">
                     <canvas id="portfolioChart"></canvas>
                 </div>
             </div>
             
-            <!-- Win Rate Chart -->
-            <div class="glass-effect rounded-xl p-4 sm:p-6 flex flex-col">
-                <h3 class="text-center text-lg sm:text-xl font-semibold mb-4">🎯 胜负比例</h3>
-                <div class="flex-1 relative min-h-[200px] sm:min-h-[250px] max-h-[300px]">
-                    <canvas id="winRateChart"></canvas>
-                </div>
-            </div>
             <!-- Trades Section -->
-            <div class="glass-effect rounded-xl p-4 sm:p-6 mt-4 sm:mt-6 flex flex-col max-h-[400px]">
+            <div class="md:col-span-1 glass-effect rounded-xl p-4 flex flex-col">
                 <h3 class="text-center text-lg sm:text-xl font-semibold mb-4">📊 最近交易记录</h3>
                 <div class="flex-1 overflow-y-auto scrollbar-thin" id="tradesContainer">
                     <div class="text-center text-white text-opacity-70 py-8">加载交易数据...</div>
@@ -102,8 +99,10 @@
     </div>
 
     <script>
-        let portfolioChart, winRateChart;
-        let updateTimeout;
+        let portfolioChart;
+        let eventSource;
+        let reconnectTimeout;
+        let connectionStatus = 'connecting';
         
         // 等待Chart.js加载完成
         function waitForChart() {
@@ -162,53 +161,117 @@
                     }
                 }
             });
-            
-            // 胜负比例图表
-            const winRateCtx = document.getElementById('winRateChart').getContext('2d');
-            winRateChart = new Chart(winRateCtx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['盈利交易', '亏损交易'],
-                    datasets: [{
-                        data: [0, 0],
-                        backgroundColor: ['#4CAF50', '#f44336'],
-                        borderWidth: 2,
-                        borderColor: '#fff'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: { duration: 300 },
-                    plugins: {
-                        legend: { 
-                            labels: { color: '#fff', font: { size: 11 } },
-                            position: 'bottom'
-                        }
-                    }
-                }
-            });
         }
         
-        // 更新数据
-        async function updateDashboard() {
-            try {
-                const response = await fetch('/api/data');
-                if (!response.ok) throw new Error('Network response was not ok');
-                
-                const data = await response.json();
-                
-                updateMetrics(data);
-                updateCharts(data);
-                updateTrades(data);
-                
-                document.getElementById('lastUpdate').textContent = 
-                    `最后更新: ${new Date().toLocaleTimeString()}`;
+        // 初始化SSE连接
+        function initSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            updateConnectionStatus('connecting');
+            eventSource = new EventSource('/api/stream');
+            
+            eventSource.onopen = function(event) {
+                console.log('✅ SSE连接已建立');
+                updateConnectionStatus('connected');
+                if (reconnectTimeout) {
+                    clearTimeout(reconnectTimeout);
+                    reconnectTimeout = null;
+                }
+            };
+            
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateMetrics(data);
+                    updateCharts(data);
+                    updateTrades(data);
+                    updateActivityLogs(data);
                     
-            } catch (error) {
-                console.error('数据更新失败:', error);
-                document.getElementById('lastUpdate').textContent = 
-                    `更新失败: ${new Date().toLocaleTimeString()}`;
+                    document.getElementById('lastUpdate').textContent = 
+                        `最后更新: ${new Date().toLocaleTimeString()}`;
+                    // 将最新活动信息滚动显示在“已连接”标签上
+                    const lastLog = (data.activity_logs || []).slice(-1)[0];
+                    if (connectionStatus === 'connected' && lastLog) {
+                        const statusElement = document.querySelector('.status-indicator');
+                        if (statusElement) {
+                            statusElement.textContent = `✅ 已连接 · ${lastLog.message}`;
+                        }
+                    }
+                        
+                } catch (error) {
+                    console.error('数据解析失败:', error);
+                }
+            };
+            
+            eventSource.onerror = function(event) {
+                console.error('❌ SSE连接错误:', event);
+                updateConnectionStatus('disconnected');
+                
+                // 自动重连机制
+                if (!reconnectTimeout) {
+                    reconnectTimeout = setTimeout(() => {
+                        console.log('🔄 尝试重新连接...');
+                        initSSE();
+                    }, 3000);
+                }
+            };
+        }
+        
+        // 更新连接状态
+        function updateConnectionStatus(status) {
+            connectionStatus = status;
+            const statusElement = document.querySelector('.status-indicator');
+            if (statusElement) {
+                const statusText = {
+                    'connecting': '🔄 连接中...',
+                    'connected': '✅ 已连接',
+                    'disconnected': '❌ 连接断开'
+                };
+                statusElement.textContent = statusText[status] || '❓ 未知状态';
+                
+                // 更新样式
+                statusElement.className = `status-indicator glass-effect px-4 py-2 rounded-full text-sm ${
+                    status === 'connected' ? 'bg-trading-green bg-opacity-20 animate-pulse-slow' :
+                    status === 'connecting' ? 'bg-yellow-500 bg-opacity-20 animate-bounce' :
+                    'bg-trading-red bg-opacity-20'
+                }`;
+            }
+        }
+        
+        // 更新活动日志
+        function updateActivityLogs(data) {
+            const logs = data.activity_logs || [];
+            const container = document.getElementById('activityLog');
+            if (!container) return;
+            if (logs.length === 0) {
+                container.innerHTML = '<div class="text-white text-opacity-70 text-xs">暂无日志</div>';
+                return;
+            }
+            const typeColor = (t) => (
+                t === 'success' ? 'text-trading-green' :
+                t === 'warning' ? 'text-yellow-300' :
+                t === 'error' ? 'text-trading-red' : 'text-white'
+            );
+            const typeIcon = (t) => (
+                t === 'success' ? '✅' :
+                t === 'warning' ? '⚠️' :
+                t === 'error' ? '❌' : 'ℹ️'
+            );
+            const items = logs.slice(-50).map(l => `
+                <div class="flex items-start gap-2 py-1">
+                    <span class="flex-shrink-0">${typeIcon(l.type)}</span>
+                    <div class="flex-1 text-xs sm:text-sm ${typeColor(l.type)}">
+                        <span class="text-white text-opacity-40 mr-2">${new Date(l.timestamp).toLocaleTimeString().slice(0,8)}</span>
+                        <span>${l.message}</span>
+                    </div>
+                </div>
+            `).join('');
+            const atBottom = Math.abs((container.scrollTop + container.clientHeight) - container.scrollHeight) < 8;
+            container.innerHTML = items;
+            if (atBottom) {
+                container.scrollTop = container.scrollHeight;
             }
         }
         
@@ -254,17 +317,6 @@
             );
             portfolioChart.data.datasets[0].data = recentHistory.map(h => h.value);
             portfolioChart.update('none');
-            
-            // 更新胜负比例图表
-            const winTrades = data.stats.winning_trades || 0;
-            const loseTrades = data.stats.losing_trades || 0;
-            
-            if (winTrades + loseTrades > 0) {
-                winRateChart.data.datasets[0].data = [winTrades, loseTrades];
-            } else {
-                winRateChart.data.datasets[0].data = [1, 0]; // 显示默认状态
-            }
-            winRateChart.update('none');
         }
         
         // 更新交易记录
@@ -310,28 +362,45 @@
             `;
         }
         
+        // 清理连接
+        function cleanup() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+        }
+        
         // 初始化
         document.addEventListener('DOMContentLoaded', async function() {
             try {
                 await initCharts();
-                updateDashboard();
+                initSSE();
                 
-                // 每5秒更新一次(降低频率以提高性能)
-                setInterval(updateDashboard, 5000);
+                console.log('🚀 Dashboard初始化完成，使用SSE实时更新');
             } catch (error) {
                 console.error('初始化失败:', error);
                 document.getElementById('lastUpdate').textContent = '初始化失败，请刷新页面';
+                updateConnectionStatus('disconnected');
             }
         });
         
-        // 页面可见性变化时暂停/恢复更新
+        // 页面可见性变化时处理SSE连接
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) {
-                if (updateTimeout) clearTimeout(updateTimeout);
+                console.log('⏸️ 页面隐藏，暂停SSE连接');
+                cleanup();
             } else {
-                updateDashboard();
+                console.log('▶️ 页面恢复，重新建立SSE连接');
+                initSSE();
             }
         });
+        
+        // 页面卸载时清理连接
+        window.addEventListener('beforeunload', cleanup);
     </script>
 </body>
 </html>

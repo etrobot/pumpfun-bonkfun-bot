@@ -4,7 +4,8 @@ Solana client abstraction for blockchain operations.
 
 import asyncio
 import json
-from typing import Any
+import os
+from typing import Any, Optional
 
 import aiohttp
 from solana.rpc.async_api import AsyncClient
@@ -19,6 +20,7 @@ from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 
 from utils.logger import get_logger
+from utils.proxy_config import proxy_config
 
 logger = get_logger(__name__)
 
@@ -36,6 +38,7 @@ class SolanaClient:
         self._client = None
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
+        
         self._blockhash_updater_task = asyncio.create_task(
             self.start_blockhash_updater()
         )
@@ -66,7 +69,12 @@ class SolanaClient:
             AsyncClient instance
         """
         if self._client is None:
+            # Solana AsyncClient使用环境变量代理设置
+            # 设置代理环境变量并保持（不恢复），以便所有请求都使用代理
+            proxy_config.set_env_proxy()
+
             self._client = AsyncClient(self.rpc_endpoint)
+
         return self._client
 
     async def close(self):
@@ -239,12 +247,16 @@ class SolanaClient:
             Optional[Dict[str, Any]]: Parsed JSON response, or None if the request fails.
         """
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.rpc_endpoint,
-                    json=body,
-                    timeout=aiohttp.ClientTimeout(10),  # 10-second timeout
-                ) as response:
+            # 使用代理配置工具
+            session_kwargs = proxy_config.get_aiohttp_session_kwargs()
+            request_kwargs = proxy_config.get_request_kwargs(self.rpc_endpoint)
+            request_kwargs.update({
+                'json': body,
+                'timeout': aiohttp.ClientTimeout(30),  # Increase timeout for proxy
+            })
+
+            async with aiohttp.ClientSession(**session_kwargs) as session:
+                async with session.post(self.rpc_endpoint, **request_kwargs) as response:
                     response.raise_for_status()
                     return await response.json()
         except aiohttp.ClientError:

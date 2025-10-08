@@ -169,3 +169,4 @@ cython_debug/
 trades/trades.log
 # Mac OS X
 .DS_Store
+dry_run_results

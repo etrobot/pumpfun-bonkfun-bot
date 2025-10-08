@@ -20,6 +20,8 @@ dependencies = [
     "protobuf>=5.29.4",
     "pyyaml>=6.0.2",
     "uvloop>=0.21.0",
+    "requests>=2.32.5",
+    "httpx[socks]>=0.28.1",
 ]
 
 [project.optional-dependencies]

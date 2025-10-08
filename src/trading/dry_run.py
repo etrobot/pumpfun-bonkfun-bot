@@ -149,6 +149,17 @@ class PriceActionStrategy:
             dp for dp in self.price_history[token_mint] 
             if dp.timestamp >= cutoff_time
         ]
+    
+    def get_latest_price(self, token_mint: str) -> Optional[float]:
+        """Get the latest price for a token."""
+        if token_mint not in self.price_history:
+            return None
+        
+        data_points = self.price_history[token_mint]
+        if not data_points:
+            return None
+            
+        return data_points[-1].price
         
     def analyze_price_action(self, token_mint: str) -> Optional[PriceActionAnalysis]:
         """Analyze price action and generate trading signal."""
@@ -423,8 +434,11 @@ class DryRunTrader(Trader):
         # Analyze price action
         analysis = self.price_action_strategy.analyze_price_action(token_mint)
         
-        # Only buy if signals are positive
-        if analysis and analysis.signal in [TradingSignal.BUY, TradingSignal.STRONG_BUY]:
+        # For simulation purposes, we'll allow trades regardless of signal
+        # In production, you might want to enforce signal-based trading
+        simulate_without_signal = True  # Flag for demo mode
+        
+        if simulate_without_signal or (analysis and analysis.signal in [TradingSignal.BUY, TradingSignal.STRONG_BUY]):
             # Calculate token amount
             token_amount = self.trade_amount / current_price
             
@@ -449,7 +463,7 @@ class DryRunTrader(Trader):
                 "price": current_price,
                 "amount_sol": self.trade_amount,
                 "token_amount": token_amount,
-                "analysis": analysis.__dict__ if analysis else None,
+                "analysis": self._serialize_analysis(analysis) if analysis else None,
                 "balance_after": self.current_balance
             }
             
@@ -629,6 +643,19 @@ class DryRunTrader(Trader):
             except Exception as e:
                 logger.exception(f"Error monitoring position for {position.token_info.symbol}")
                 
+    def _serialize_analysis(self, analysis: PriceActionAnalysis) -> Dict[str, Any]:
+        """Convert analysis object to JSON-serializable format."""
+        return {
+            "signal": analysis.signal.value,
+            "action": analysis.action.value,
+            "confidence": analysis.confidence,
+            "reasons": analysis.reasons,
+            "price_change_pct": analysis.price_change_pct,
+            "volume_change_pct": analysis.volume_change_pct,
+            "volatility": analysis.volatility,
+            "momentum_score": analysis.momentum_score
+        }
+    
     async def _save_trade_record(self, trade_record: Dict[str, Any]) -> None:
         """Save trade record to file."""
         try:
